@@ -33,6 +33,19 @@ copy .env.example .env            # macOS/Linux: cp .env.example .env
 
 ## Run
 
+### Folder and text-file commands
+
+Try “Open my Documents folder”, “Read Documents/notes.txt”,
+“Create Documents/notes.txt containing Hello Mitraa”, or
+“Append a new line saying Buy milk to Documents/notes.txt”.
+The model routes these through `open_folder`, `read_file`, and `write_text_file`.
+Folder opening uses Windows File Explorer; reading/listing stays in the chat.
+Text writes always show the existing Allow/Deny approval card. Existing versions
+go to the Recycle Bin before replacement or append. Creation refuses to overwrite.
+Writes support UTF-8 .txt/.md/.log/.csv/.json, with a 1 MB resulting-file limit.
+Paths remain restricted by `MITRAA_ALLOWED_ROOTS`; this feature does not grant
+access to additional folders. General commands require the configured agent provider.
+
 ### Responsibilities and local follow-up
 
 Open **My responsibilities** from the system tray. Select **New responsibility**, enter
@@ -128,6 +141,16 @@ python -m pytest -p no:cacheprovider --basetemp logs/verification-tests
 ```
 
 ### Expandable conversation card
+
+Replies appear immediately when the agent finishes, independently of speech
+preparation. You can send another message while voice synthesis is running;
+doing so interrupts the old speech. Voice failures keep the text reply visible.
+Kokoro generates a short opening phrase first, then prepares bounded phrases
+ahead of playback through a two-slot queue. Playback lifecycle spans the full
+reply, so microphone gating remains active between phrases. A bounded in-memory
+cache reuses repeated phrases; no generated audio is saved by default. The CPU
+runtime uses four inference threads. This reduces time to first speech but local
+inference still takes time and can pause between phrases on slower hardware.
 
 Use the diagonal-arrow icon at the upper card's top-right to expand the current
 conversation upward; use the inward arrows to return to the latest answer.

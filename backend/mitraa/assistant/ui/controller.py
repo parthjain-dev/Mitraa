@@ -21,11 +21,13 @@ class State(str, Enum):
     WORKING='working'
     AWAITING_APPROVAL='awaiting_approval'
     SPEAKING='speaking'
+    PREPARING_SPEECH='preparing_speech'
     ERROR='error'
 
 LABELS = {'idle':'Ready', 'loading_voice':'Loading voice…', 'waiting_for_speech':'Listening…',
           'recording_speech':'Listening to you…', 'transcribing':'Understanding…', 'thinking':'Thinking…',
-          'working':'Working…', 'awaiting_approval':'Permission needed', 'speaking':'Speaking…', 'error':'Needs attention'}
+          'working':'Working…', 'awaiting_approval':'Permission needed', 'speaking':'Speaking…',
+          'preparing_speech':'Preparing voice…', 'error':'Needs attention'}
 
 class Bridge(QObject):
     event = Signal(str, object, int)
@@ -47,6 +49,7 @@ class Controller(QObject):
         self.history_paged=False
         self.voice_builder=None; self.voice_settings=None; self.voice_initializing=False
         self.closed=False; self.escape_hook=None; self.use_escape_hook=False
+        self.pending_reply=None
         self.orb_restart=QTimer(self); self.orb_restart.setSingleShot(True)
         self.orb_restart.timeout.connect(self.restart_expanded_listening)
         if preview: self.worker=None
@@ -196,6 +199,8 @@ class Controller(QObject):
         self.listen()
 
     def invalidate_audio(self):
+        # Preserve the answer if playback is dismissed or interrupted before start.
+        self.reveal_reply(show=False)
         self.orb_restart.stop()
         self.epoch+=1; self.session_open=False
         if self.voice_input: self.voice_input.cancel()
@@ -300,6 +305,15 @@ class Controller(QObject):
         self.speaker.post=lambda event:self.bridge.event.emit(*event,token)
         self.speaker.say(text)
 
+    def reveal_reply(self, show=True):
+        text=self.pending_reply
+        if text is None: return
+        self.pending_reply=None; self.busy=False
+        self.live_message('assistant',text)
+        self.result_text=text; self.result_card=('Mitraa',text,False,False)
+        self.set_state(State.IDLE)
+        if show and self.overlay.isVisible(): self.overlay.show_card('Mitraa',text)
+
     def show_error(self,title,text,details=False):
         self.session_open=False; self.result_text=title; self.result_card=(title,text,False,details)
         self.set_state(State.ERROR)
@@ -363,18 +377,26 @@ class Controller(QObject):
                 self.submit(payload,voice=True)
         elif kind=='voice_none': self.show_error('I didn’t catch anything',str(payload))
         elif kind=='voice_error': self.show_error('Voice unavailable',str(payload))
-        elif kind=='speech_error': self.show_error('Speech playback unavailable',str(payload),details=True)
+        elif kind=='speech_error':
+            if self.pending_reply is not None or (self.result_text and self.state in (State.PREPARING_SPEECH,State.SPEAKING)):
+                self.reveal_reply()
+                self.set_state(State.IDLE)
+                logger.warning('Speech playback unavailable: %s',payload)
+            else:
+                self.show_error('Speech playback unavailable',str(payload),details=True)
         elif kind=='speech_started':
+            self.reveal_reply()
             if not self.session_open: self.set_state(State.SPEAKING)
         elif kind=='speech_level':
             if not self.session_open and self.state==State.SPEAKING:
                 self.overlay.orb.level=payload; self.overlay.waveform.feed(payload)
         elif kind in ('speech_finished','speech_stopped'):
+            self.reveal_reply()
             if not self.session_open: self.set_state(State.AWAITING_APPROVAL if self.pending else State.IDLE)
         elif kind=='step':
             self.progress=f'{payload.tool}: {payload.summary}'; self.set_state(State.WORKING)
         elif kind=='response':
-            if not self.busy: return
+            if not self.busy or self.pending_reply is not None: return
             self.busy=False
             info=payload.pending_approval
             if payload.type=='approval_required' and info:
@@ -382,11 +404,17 @@ class Controller(QObject):
                 self.set_state(State.AWAITING_APPROVAL)
                 if self.overlay.isVisible(): self.show_approval()
             else:
-                self.live_message('assistant',payload.text)
-                self.result_text=payload.text; self.result_card=None; self.set_state(State.IDLE)
-                self.result_card=('Mitraa',payload.text,False,False)
-                if self.overlay.isVisible(): self.overlay.show_card('Mitraa',payload.text)
-                self.say(payload.text)
+                self.pending_reply=payload.text
+                # Text must never wait for local voice synthesis or playback.
+                self.reveal_reply()
+                if (self.overlay.isVisible() and self.speaker
+                        and self.speaker.enabled and not self.muted and not self.session_open):
+                    self.set_state(State.PREPARING_SPEECH)
+                    try:
+                        self.say(payload.text)
+                    except Exception:
+                        logger.exception('Could not queue speech')
+                        self.set_state(State.IDLE)
         elif kind=='error':
             if not self.busy: return
             self.busy=False
@@ -484,6 +512,7 @@ def run_qt(preview=False, startup_settings=None, on_ready=None, show_responsibil
         if controller.speaker:
             controller.speaker.enabled=not checked
             if checked: controller.speaker.stop()
+        if checked: controller.reveal_reply()
         overlay.orb.update()
     action('Mute speech output',mute,True)
     def reduce(checked):

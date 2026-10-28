@@ -6,6 +6,43 @@ import numpy as np
 import pytest
 from mitraa.assistant.neural_speaker import NeuralSpeaker
 
+def test_chunking_keeps_every_word_and_shortens_first_audio():
+    from mitraa.assistant.neural_speaker import speech_chunks
+    text='Your report is ready. I have organized the remaining tasks and prepared a detailed summary for you to review before the next meeting.'
+    chunks=speech_chunks(text)
+    assert ' '.join(chunks)==text and len(chunks)>1
+    assert len(chunks[0])<=60 and all(len(c)<=100 for c in chunks)
+
+def test_first_phrase_plays_before_rest_is_ready_and_cache_reuses_audio(monkeypatch):
+    import mitraa.assistant.neural_speaker as module
+    first_played=threading.Event(); release=threading.Event(); done=threading.Event()
+    calls=[]; events=[]; played=[]
+    class Engine:
+        def create(self,text,**kwargs):
+            calls.append(text)
+            if len(calls)==2: assert release.wait(3)
+            return np.ones(2400,dtype=np.float32),24000
+    monkeypatch.setattr(module,'load_engine',lambda _:Engine())
+    speaker=NeuralSpeaker('unused')
+    def play(samples,rate,post,generation,*,final=True):
+        assert not final and not speaker.idle.is_set()
+        played.append(True); post(('speech_started',None))
+        first_played.set()
+    monkeypatch.setattr(speaker,'_play',play)
+    def event(item):
+        events.append(item[0])
+        if item[0] in ('speech_finished','speech_error'): done.set()
+    speaker.post=event
+    text='Your report is ready. The remaining tasks are organized for review.'
+    try:
+        speaker.say(text); assert first_played.wait(3)
+        assert not done.is_set() and not speaker.idle.is_set()
+        release.set(); assert done.wait(3)
+        assert events.count('speech_started')==1 and events.count('speech_finished')==1
+        count=len(calls); done.clear(); speaker.say(text); assert done.wait(3)
+        assert len(calls)==count
+    finally: release.set(); speaker.close()
+
 def bare_speaker():
     speaker=NeuralSpeaker.__new__(NeuralSpeaker)
     speaker._interrupt=threading.Event(); speaker._closing=threading.Event()
