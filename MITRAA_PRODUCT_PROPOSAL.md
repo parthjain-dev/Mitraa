@@ -1,6 +1,16 @@
 # Mitraa — Personal Follow-Through Assistant
 
-**Status:** Proposed product direction; no implementation changes authorized by this proposal.
+**Status:** Product direction. Milestones 1–3 have implementations; milestone 4 now
+has local text preparation and revision review. Milestone 5 now has a bounded
+coding-proposal adapter using selected text, an isolated output folder, review and
+static checks. Command-capable agent isolation, automatic integration and the pilot
+remain future work. Implemented features still require real workflow validation.
+
+**Implementation update (29 October 2026):** Milestone 4 includes local checklist
+preparation, saved text/Markdown drafts, provenance snapshots, missing-fact questions,
+revision diffs/history, and explicit review decisions. AI tools can prepare/revise
+drafts; acceptance is recorded through the review UI/API. This does not provide
+PDF/Word parsing, formatted export, automated factual verification, or submission.
 **Date:** 20 October 2026
 **Product promise:** Tell Mitraa what you need to handle. It remembers the responsibility, prepares the next steps, and helps you carry it through to completion.
 

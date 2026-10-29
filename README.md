@@ -20,6 +20,17 @@ deadlines, completion confirmation, and follow-up reminders. **AI connection** c
 chat without editing files by hand. Local tracking and reminders do not need an API key.
 Reminders require Mitraa running and catch up after a missed time or restart.
 
+**Drafts & review** on a saved responsibility adds local checklists, editable
+text/Markdown drafts, revision history, diffs, source references, missing-fact
+questions, and explicit review decisions. Local drafting works without an API;
+AI-assisted preparation uses the configured provider. Reviewing a draft does not
+submit it or complete the responsibility.
+
+**Coding jobs** prepares bounded source edits through the configured provider.
+Review selected text and approve the job before any remote request. Proposed
+changes go into an isolated job folder with diffs and static syntax checks;
+original files stay unchanged. See the backend README for limits and review steps.
+
 ```powershell
 cd backend
 python -m venv .venv; .venv\Scripts\activate

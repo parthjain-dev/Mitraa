@@ -80,6 +80,15 @@ Equal start/end disables the quiet interval. Quiet hours suppress popups, not th
 The desktop checks every 15 seconds; no continuous microphone or screen capture is used.
 Notifications contain a generic count, keeping titles and personal messages out of popups.
 
+Due follow-ups also show a non-modal, always-on-top Mitraa reminder card with the
+title/message, Open, Acknowledge, and Snooze 10 min controls. This card does not
+depend on Windows notification banners or `notified_at`; previously missed due
+items can appear again after restarting Mitraa. Closing the card leaves the inbox
+unchanged and suppresses the current due alerts for this session. Quiet hours and
+the notification preference suppress this card too. It does not interrupt speech
+or activate the microphone. Task details are visible on this local card, while
+Windows notifications continue to use generic counts.
+
 Reminders work while the desktop runs. If the PC sleeps, is off, or Mitraa is closed,
 the next poll catches up on missed times. Due items remain in the inbox until acknowledged,
 snoozed, cancelled or the responsibility is closed. Successful notification requests are
@@ -92,6 +101,103 @@ The local SQLite schema is upgraded additively on launch: existing conversations
 projects and file action history are preserved. All changes happen in transactions. Each
 responsibility has a version to prevent silently overwriting newer edits, and an activity
 history. These features work without an AI provider.
+
+### Preparation and review (milestone 4)
+
+Select a saved, open responsibility and choose **Drafts & review**. **Prepare
+checklist** creates a local Markdown checklist from the saved outcome and next
+action without an API call. **New draft** allows plain-text/Markdown preparation.
+Save the draft before reviewing. Source references must already be listed on the
+responsibility; references never read a file or fetch a URL automatically. Use
+the existing sandboxed read tools when the AI needs actual file contents.
+
+The editor includes **Preview**, **Changes** against the previous saved revision,
+and **Saved revisions** with source snapshots, missing facts, review notes, and
+content/context hashes. Revisions persist in SQLite. New edits create a pending
+revision instead of inheriting earlier acceptance. Stale writes and reviews are
+rejected; reload after preserving any unsaved text. Background inbox refresh does
+not replace the draft editor's text.
+
+Resolve **Missing facts / questions**, save, enter a review note, then choose
+**Accept reviewed draft** or **Request changes** and confirm. Missing facts block
+acceptance. Acceptance is the user's review record, not automated factual
+verification, responsibility completion, export, or external submission. Existing
+responsibility completion still requires its separate confirmation note. Forgetting
+a responsibility also removes its drafts and all draft revisions.
+
+With a provider connected, try: “Prepare a factual application draft for my
+internship responsibility using my supplied notes. List unknown facts as questions
+and save it for review.” The agent can use `prepare_responsibility_draft`,
+`list_responsibility_drafts`, and `revise_responsibility_draft`; it cannot accept
+drafts through a review tool. Use the existing approval-gated `write_text_file`
+tool if you subsequently want a draft written to a permitted file. The draft
+editor itself does not write outside the local database or submit applications.
+
+API additions: `GET/POST /responsibilities/{id}/drafts`,
+`POST /responsibilities/{id}/checklist`, `GET/PATCH /drafts/{id}`, and
+`POST /drafts/{id}/review`. Updates/reviews require `expected_version`; review
+also requires `confirmed=true` and a note. The schema additions are new tables,
+preserving existing conversations, responsibilities, memories and reminders.
+
+### Bounded coding jobs (milestone 5 first adapter)
+
+Select a saved open responsibility, then **Coding jobs**. This adapter uses the
+configured OpenAI-compatible provider to propose small source-code edits. It does
+not launch Codex/Claude, terminals, or generated code.
+
+1. Choose an existing project folder inside `MITRAA_ALLOWED_ROOTS`, for example a
+   small project under Documents. Enter an objective, acceptance criteria, selected
+   source files and allowed output paths, one relative path per line. Supported
+   text: `.py`, `.md`, `.txt`, `.json`, `.js`, `.ts`, `.css`, `.html`. Existing output
+   files are also included in the selected context.
+2. **Prepare contract** saves the exact selected text, endpoint, model and limits
+   locally. Review the Contract / selected context tab.
+3. **Start approved job** asks before sharing this context with the displayed
+   provider. One request, no SDK retries, 24 KB maximum selected file text,
+   256–4096 output tokens, and a 10–120 second request timeout. Late proposals are
+   discarded. These are not currency spending caps; remote work already sent
+   cannot be undone or refunded by cancellation.
+4. Inspect proposed files, diffs, missing facts and actual local Python AST/JSON
+   syntax checks. Syntax success is not proof acceptance criteria are met. No
+   project tests, imports, code execution, package installation or shell commands
+   run. Other text types require manual validation.
+5. Outputs are saved only in gitignored `backend/jobs/<job-id>/`. Original files
+   remain unchanged. Enter a review note and confirm **Accept review**; unresolved
+   missing facts or changed artifacts block acceptance. This records review only,
+   not a merge, submission or responsibility completion. Inspect/copy selected
+   outputs manually if you decide to integrate them.
+
+Jobs persist through prepared/running/ready_for_review/verification_failed/failed/
+cancelled/interrupted/accepted states. One coding request runs at a time.
+Cancellation discards late results; restart marks running jobs interrupted without
+automatic retries. Prepare a new contract to retry or when source files/provider
+change. Traversal, links, hidden files and credential-like names are refused.
+The remote worker gets selected text and no filesystem or shell tools.
+
+Provider-reported usage appears in Token usage. Isolated output folders remain
+on disk for inspection even after responsibility metadata is forgotten; remove
+them manually when no longer needed. No live provider request runs in automated
+tests. Real-world pilot validation, automatic merging, and a command-capable
+isolated agent integration remain outside this initial adapter.
+
+API: `POST /coding-jobs`, `GET /responsibilities/{id}/coding-jobs`,
+`GET /coding-jobs/{id}`, `POST /coding-jobs/{id}/cancel` and `/accept`.
+Starting remote work requires the desktop's explicit contract confirmation;
+chat tools cannot silently start a coding job.
+
+### Token usage
+
+Open **Token usage** from the tray or My responsibilities. Refresh to see recorded
+input/output/total tokens, UTC-day and lifetime totals, a provider/model breakdown,
+and recent API-backed request totals (including tool loops and plan generation).
+Tracking starts after this update; earlier usage cannot be recovered from chat
+text. A new additive SQLite table persists across restart and provider switches.
+Only provider-reported counts are recorded: missing counts are unknown, not zero.
+Failed calls without usage and SDK-internal retries may consume unreported tokens.
+Local greetings, preview, speech recognition/output, and offline work do not count
+as model API calls. No keys or message contents are stored in the usage ledger.
+This is not a billing calculation or a remaining-free-quota display. `GET /usage`
+returns the same summary; chat responses also include per-turn `usage`.
 
 ### AI connection setup
 
@@ -132,6 +238,11 @@ popups; starting the API alone does not deliver notifications.
 The configured agent also has `create_responsibility`, `list_responsibilities`,
 `update_responsibility`, `add_reminder`, `change_reminder`, and `get_follow_up` tools.
 Natural-language requests require a configured provider; direct desktop capture does not.
+
+Relative chat reminders use `add_relative_reminder` with a minute delay computed
+from the computer clock. `get_current_time` supplies current local/UTC time for
+absolute-time requests. Confirmations include the saved local offset and timezone;
+relative reminders do not silently set or change the responsibility deadline.
 
 Verification:
 

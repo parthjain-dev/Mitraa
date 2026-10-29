@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mitraa import audit
+from mitraa.usage import tracked
 from mitraa.agent.llm import LLMClient, LLMError, ToolCallRequest
 from mitraa.agent.prompts import build_system_prompt
 from mitraa.memory.retrieval import top_k
@@ -53,6 +54,7 @@ class AgentResponse(BaseModel):
     text: str
     pending_approval: ApprovalInfo | None = None
     steps: list[Step] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class ConversationNotFound(Exception):
@@ -98,6 +100,7 @@ class Orchestrator:
 
     # ------------------------------------------------------------ public API
 
+    @tracked
     def run(self, conversation_id: str | None, user_message: str, *, save_user: bool = True) -> AgentResponse:
         conversation = self._conversation(conversation_id, user_message)
         self._expire_pending(conversation.id)
@@ -106,6 +109,7 @@ class Orchestrator:
         self.session.commit()
         return self._loop(_Run(conversation.id))
 
+    @tracked
     def resume(self, approval_id: str, approved: bool) -> AgentResponse:
         pending = self.session.get(PendingApproval, approval_id)
         if pending is None:

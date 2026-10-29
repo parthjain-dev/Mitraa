@@ -506,6 +506,7 @@ def run_qt(preview=False, startup_settings=None, on_ready=None, show_responsibil
     if not preview:
         action('My responsibilities',lambda:local_service().open())
         action('AI connection',lambda:local_service().open_provider())
+        action('Token usage',lambda:local_service().open_usage())
         QTimer.singleShot(0,lambda:local_service().open() if show_responsibilities else local_service())
     def mute(checked):
         controller.muted=checked; overlay.orb.muted=checked

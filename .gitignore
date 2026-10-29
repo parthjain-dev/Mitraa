@@ -1,23 +1,76 @@
-# secrets
+# Local credentials and environment overrides (keep shareable templates)
 .env
+.env.*
 !.env.example
+!.env.*.example
+!.env.sample
+!.env.template
 .mitraa-provider-*.tmp
 
-# python
+# Python environments and bytecode
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 .venv/
+.venv-*/
 venv/
-.pytest_cache/
+env/
 
-# local data
+# Test, lint, type-check and coverage output
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python packaging output
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Local SQLite data and transaction sidecars
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 
-# node (phase 4)
+# Downloaded speech models and local runtime caches
+/backend/models/
+/backend/jobs/
+.cache/
+
+# Node / Next.js generated output (keep dependency lockfiles)
 node_modules/
 .next/
+out/
+*.tsbuildinfo
+.turbo/
 
-# logs
+# Runtime logs and temporary output
 logs/
-backend/models/
+*.log
+/tmp/
+/backend/tmp/
+
+# OS and editor temporary files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/

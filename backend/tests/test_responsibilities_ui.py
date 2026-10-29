@@ -101,3 +101,56 @@ def test_wall_times_reject_nonexistent_or_ambiguous_dst(wall):
 def test_explicit_timezone_converts_to_utc():
     editor=date_editor(); editor.setDateTime(QDateTime.fromString('2026-10-21T15:30:00','yyyy-MM-ddTHH:mm:ss'))
     assert wall_instant(editor,'Asia/Kolkata')=='2026-10-21T10:00:00+00:00'
+
+
+def make_due(runtime, session_factory):
+    from mitraa.responsibilities.schemas import ResponsibilityCreate, ReminderCreate
+    with session_factory() as session:
+        owner=service.create(session,ResponsibilityCreate(title='Test local reminder'))
+        row=service.add_reminder(session,ReminderCreate(responsibility_id=owner['id'],
+            message='Check the alert',due_at=datetime.now(timezone.utc)+timedelta(minutes=1)))
+        saved=session.get(Reminder,row['id'])
+        saved.due_at=datetime.now(timezone.utc)-timedelta(minutes=1)
+        saved.notified_at=datetime.now(timezone.utc)  # OS already requested, user missed it
+        session.commit()
+    runtime.refresh(); until(lambda:runtime.alert.isVisible())
+    return row['id']
+
+
+def test_local_alert_works_without_system_notifications_and_snoozes(runtime,session_factory):
+    runtime.tray.supportsMessages=lambda:False
+    mid=make_due(runtime,session_factory)
+    assert runtime.alert.reminder_id==mid and not runtime.tray.messages
+    runtime.alert.snooze.click(); runtime.alert.snooze.click()
+    until(lambda:runtime.snapshot['reminders'][0]['status']=='scheduled')
+    assert not runtime.alert.isVisible()
+    with session_factory() as session:
+        saved=session.get(Reminder,mid)
+        assert saved.notified_at is None
+        saved.due_at=datetime.now(timezone.utc)-timedelta(seconds=1); session.commit()
+    runtime.refresh(); until(lambda:runtime.alert.isVisible())
+    runtime.alert.ack.click()
+    until(lambda:runtime.snapshot['reminders'][0]['status']=='acknowledged')
+    assert not runtime.alert.isVisible()
+    assert runtime.snapshot['responsibilities'][0]['status']=='captured'
+
+
+def test_dismissed_local_alert_stays_in_inbox_without_reopening(runtime,session_factory):
+    make_due(runtime,session_factory)
+    runtime.alert.reject(); runtime.refresh()
+    QTest.qWait(150); app.processEvents()
+    assert not runtime.alert.isVisible() and runtime.snapshot['due']
+
+
+def test_local_alert_respects_notification_preferences(runtime,session_factory):
+    make_due(runtime,session_factory)
+    payload=runtime.snapshot
+    runtime.update_alert({**payload,'preferences':{**payload['preferences'],'notifications_enabled':False}})
+    assert not runtime.alert.isVisible()
+    runtime.update_alert({**payload,'preferences':{**payload['preferences'],
+        'quiet_enabled':True,'quiet_start':'00:00','quiet_end':'23:59','timezone':'UTC'}})
+    # Use an explicit, always-quiet predicate for deterministic UI wiring.
+    from unittest.mock import patch
+    with patch('mitraa.responsibilities.service.is_quiet',return_value=True):
+        runtime.update_alert(payload)
+    assert not runtime.alert.isVisible()

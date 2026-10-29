@@ -78,6 +78,12 @@ def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
+@app.get('/usage')
+def token_usage(session: Session = Depends(get_session)):
+    from mitraa.usage import summary
+    return summary(session)
+
+
 @app.post("/chat", response_model=AgentResponse)
 def chat(request: ChatRequest, agent: Orchestrator = Depends(get_orchestrator)) -> AgentResponse:
     try:

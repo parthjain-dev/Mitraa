@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from PySide6.QtCore import QObject, Signal, Qt, QTimer, QDateTime, QTimeZone
-from PySide6.QtWidgets import (QDialog, QWidget, QLabel, QPushButton, QLineEdit, QPlainTextEdit,
+from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QLabel, QPushButton, QLineEdit, QPlainTextEdit,
     QComboBox, QCheckBox, QDateTimeEdit, QTimeEdit, QVBoxLayout, QHBoxLayout, QFormLayout,
     QTreeWidget, QTreeWidgetItem, QTabWidget, QSplitter, QMessageBox, QDialogButtonBox, QScrollArea, QFrame)
 
@@ -143,7 +143,7 @@ class ResponsibilityDesk(QDialog):
         header = QHBoxLayout(); title = QLabel('My responsibilities'); title.setStyleSheet('font-size:20px;font-weight:600;')
         header.addWidget(title); header.addStretch()
         for label, callback in [('New responsibility', self.new), ('Refresh', self.refresh_view),
-                                ('AI connection', runtime.open_provider)]:
+                                ('AI connection', runtime.open_provider), ('Token usage',runtime.open_usage)]:
             button = QPushButton(label); button.clicked.connect(callback); header.addWidget(button)
         layout.addLayout(header)
         self.notice = QLabel('Saved on this PC. Reminders need Mitraa running; missed times catch up when it resumes.')
@@ -180,8 +180,12 @@ class ResponsibilityDesk(QDialog):
         row = QHBoxLayout(); self.save_button = QPushButton('Save responsibility'); self.save_button.clicked.connect(self.save)
         self.follow_button = QPushButton('Add follow-up'); self.follow_button.clicked.connect(self.add_follow_up)
         self.forget_button = QPushButton('Forget…'); self.forget_button.clicked.connect(self.forget)
+        self.drafts_button = QPushButton('Drafts & review'); self.drafts_button.clicked.connect(self.open_drafts)
         for button in [self.save_button,self.follow_button,self.forget_button]: row.addWidget(button)
         form_column.addLayout(row)
+        form_column.addWidget(self.drafts_button)
+        self.jobs_button=QPushButton('Coding jobs'); self.jobs_button.clicked.connect(self.open_jobs)
+        form_column.addWidget(self.jobs_button)
         self.history = QPlainTextEdit(); self.history.setReadOnly(True); self.history.setMaximumHeight(95)
         form_column.addWidget(QLabel('Activity')); form_column.addWidget(self.history)
         editor_scroll=QScrollArea(); editor_scroll.setWidgetResizable(True)
@@ -209,6 +213,19 @@ class ResponsibilityDesk(QDialog):
 
     def edited(self, *_):
         if not self.loading: self.dirty = True
+
+    def open_drafts(self):
+        if not self.selected_id or self.dirty:
+            self.notice.setText('Save or refresh the responsibility before opening drafts.'); return
+        item=self.items[self.selected_id]
+        if item['status'] in {'completed','cancelled'}:
+            self.notice.setText('Reopen this responsibility before preparing work.'); return
+        self.runtime.open_drafts(item)
+
+    def open_jobs(self):
+        if not self.selected_id or self.dirty:
+            self.notice.setText('Save the responsibility before opening coding jobs.');return
+        self.runtime.open_jobs(self.items[self.selected_id])
 
     def refresh_view(self):
         if self.pending_save or not self.can_discard(): return
@@ -318,7 +335,8 @@ class ResponsibilityDesk(QDialog):
 
     def forget(self):
         if self.selected_id and QMessageBox.warning(self,'Forget responsibility',
-            'Permanently remove this responsibility, its reminders and activity? This cannot be undone.',
+            'Permanently remove this responsibility, drafts, coding-job records, reminders and activity? '
+            'Isolated coding output folders remain on disk; remove them manually when no longer needed. This cannot be undone.',
             QMessageBox.Yes | QMessageBox.Cancel,QMessageBox.Cancel)==QMessageBox.Yes:
             self.dirty=False
             self.runtime.worker.submit('forget',id=self.selected_id,expected_version=self.version)
@@ -358,6 +376,58 @@ class ResponsibilityDesk(QDialog):
         else: event.ignore()
 
 
+class ReminderAlert(QDialog):
+    """Non-modal local alert; closing never acknowledges a reminder."""
+    dismissed = Signal()
+
+    def __init__(self, runtime):
+        super().__init__(None, Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.runtime = runtime
+        self.reminder_id = None
+        self.setWindowTitle('Mitraa · Reminder')
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setStyleSheet(STYLE)
+        self.setFixedWidth(390)
+        layout = QVBoxLayout(self)
+        self.heading = QLabel('Follow-up due'); layout.addWidget(self.heading)
+        self.message = QLabel(); self.message.setWordWrap(True)
+        self.message.setTextFormat(Qt.PlainText); layout.addWidget(self.message)
+        self.notice = QLabel(); self.notice.setWordWrap(True); layout.addWidget(self.notice)
+        row = QHBoxLayout(); layout.addLayout(row)
+        self.ack = QPushButton('Acknowledge')
+        self.snooze = QPushButton('Snooze 10 min')
+        self.open_button = QPushButton('Open')
+        for button in (self.ack, self.snooze, self.open_button): row.addWidget(button)
+        self.ack.clicked.connect(lambda: self.act('acknowledge'))
+        self.snooze.clicked.connect(lambda: self.act('snooze'))
+        self.open_button.clicked.connect(runtime.open)
+
+    def act(self, action):
+        if not self.reminder_id or not self.ack.isEnabled(): return
+        self.ack.setEnabled(False); self.snooze.setEnabled(False)
+        args = dict(reminder_id=self.reminder_id, action=action)
+        if action == 'snooze': args['due_at'] = datetime.now(timezone.utc)+timedelta(minutes=10)
+        self.runtime.worker.submit('reminder_action', **args)
+
+    def present(self, reminder, count):
+        self.reminder_id = reminder['id']
+        self.heading.setText(f'Follow-up due · {count} pending')
+        self.message.setText(reminder['title']+'\n'+reminder['message'])
+        self.notice.setText('Closing this alert leaves the reminder in your inbox.')
+        self.ack.setEnabled(True); self.snooze.setEnabled(True)
+        self.adjustSize()
+        area = QApplication.primaryScreen().availableGeometry()
+        self.move(max(area.left(), area.right()-self.width()-16),
+                  max(area.top(), area.bottom()-self.height()-16))
+        self.show()  # no activateWindow/focus stealing during voice or typing
+
+    def reject(self):
+        self.hide(); self.dismissed.emit()
+
+    def closeEvent(self, event):
+        self.dismissed.emit(); super().closeEvent(event)
+
+
 class DeskRuntime(QObject):
     result = Signal(str,object,str)
 
@@ -369,13 +439,22 @@ class DeskRuntime(QObject):
         except (ValueError,KeyError): self.timezone='UTC'
         self.tray=tray; self.controller=controller; self.snapshot={}; self.closed=False
         self.notification_inflight=set()
+        self.alert_seen=set()
+        self.drafts=None
+        self.usage_dialog=None
+        self.jobs=None
         self.result.connect(self.handle,Qt.QueuedConnection)
         self.worker=worker or FollowUpWorker(lambda op,data,error:self.result.emit(op,data,error),self.timezone,factory)
+        from mitraa.assistant.coding_worker import CodingWorker
+        self.coder=CodingWorker(lambda op,data,error:self.result.emit(op,data,error),factory=factory)
         self.desk=ResponsibilityDesk(self); self.provider=ProviderDialog(self)
+        self.alert=ReminderAlert(self)
+        self.alert.dismissed.connect(self.dismiss_alert)
         self.timer=QTimer(self); self.timer.setInterval(15000); self.timer.timeout.connect(self.refresh); self.timer.start()
         tray.messageClicked.connect(self.open)
         self.refresh()
         self.worker.submit('provider_status')
+        self.worker.submit('job_recover')
 
     def refresh(self):
         self.worker.submit('snapshot')
@@ -386,8 +465,41 @@ class DeskRuntime(QObject):
     def open_provider(self):
         self.provider.open_settings()
 
+    def open_usage(self):
+        if self.usage_dialog is None:
+            from mitraa.assistant.ui.usage import UsageDialog
+            self.usage_dialog=UsageDialog(self)
+        self.usage_dialog.load()
+
+    def open_drafts(self,item):
+        if self.drafts is None:
+            from mitraa.assistant.ui.drafts import DraftDesk
+            self.drafts=DraftDesk(self)
+        self.drafts.open_for(item)
+
+    def open_jobs(self,item):
+        if self.jobs is None:
+            from mitraa.assistant.ui.jobs import JobDesk
+            self.jobs=JobDesk(self)
+        self.jobs.open_for(item)
+
     def handle(self,operation,payload,error):
         if self.closed: return
+        if operation=='job_changed':
+            if self.jobs and self.jobs.current and self.jobs.current['id']==payload['id']:self.jobs.refresh()
+            return
+        if operation.startswith('job_'):
+            if operation!='job_recover' and self.jobs:self.jobs.result(operation,payload,error)
+            return
+        if operation=='usage':
+            if self.usage_dialog: self.usage_dialog.result(payload,error)
+            return
+        if operation.startswith('draft_'):
+            if self.drafts: self.drafts.result(operation,payload,error)
+            if not error:
+                self.refresh()
+                if self.desk.selected_id: self.worker.submit('detail',id=self.desk.selected_id)
+            return
         if operation.startswith('provider_'):
             self.provider.result(operation,payload,error)
             if not error:
@@ -399,6 +511,9 @@ class DeskRuntime(QObject):
         if error:
             if operation=='notified': self.notification_inflight.clear()
             self.desk.notice.setText(error)
+            if operation=='reminder_action' and self.alert.isVisible():
+                self.alert.notice.setText(error)
+                self.alert.ack.setEnabled(True); self.alert.snooze.setEnabled(True)
             if operation in {'create','patch'}:
                 self.desk.pending_save=False; self.desk.editor.setEnabled(True)
             return
@@ -413,6 +528,7 @@ class DeskRuntime(QObject):
             if operation=='create' and payload['responsibilities']:
                 self.desk.load_item(payload['responsibilities'][0])
         self.snapshot=payload; self.desk.apply_snapshot(payload)
+        self.update_alert(payload)
         # Successful delivery and snoozing release the in-flight guard so a
         # later snooze occurrence can notify again using the same reminder ID.
         self.notification_inflight.intersection_update(r['id'] for r in payload['notify'])
@@ -425,7 +541,35 @@ class DeskRuntime(QObject):
             ids=[r['id'] for r in candidates]; self.notification_inflight.update(ids)
             self.worker.submit('notified',ids=ids)
 
+    def dismiss_alert(self):
+        for row in self.snapshot.get('due',[]):
+            self.alert_seen.add((row['id'],row['due_at']))
+
+    def update_alert(self, payload):
+        from mitraa.responsibilities.service import is_quiet
+        from mitraa.responsibilities.schemas import Preferences
+        prefs=Preferences.model_validate(payload['preferences'])
+        due=payload['due']
+        keys={(row['id'],row['due_at']) for row in due}
+        self.alert_seen.intersection_update(keys)
+        if not prefs.notifications_enabled or is_quiet(prefs,datetime.now(timezone.utc)):
+            self.alert.hide(); return
+        candidates=[r for r in due if (r['id'],r['due_at']) not in self.alert_seen]
+        if not candidates:
+            self.alert.hide(); return
+        # Deliberately independent of notified_at: an OS request is not delivery.
+        # Retain the card across polls until acted on or dismissed this session.
+        current=next((r for r in candidates if r['id']==self.alert.reminder_id),None)
+        if current and self.alert.isVisible(): return
+        self.alert.present(candidates[0],len(due))
+
     def shutdown(self):
         self.closed=True; self.timer.stop(); self.worker.shutdown()
+        self.coder.shutdown()
+        self.alert.close()
+        if self.usage_dialog: self.usage_dialog.close()
+        if self.jobs: self.jobs.close()
+        if self.drafts:
+            self.drafts.dirty=False; self.drafts.pending=False; self.drafts.close()
         # Application exit must not open a discard prompt.
         self.desk.dirty=False; self.desk.close(); self.provider.close()

@@ -198,3 +198,56 @@ class ReminderPreferences(Base):
     quiet_start: Mapped[str] = mapped_column(String(5), default="22:00")
     quiet_end: Mapped[str] = mapped_column(String(5), default="08:00")
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class PreparedDraft(Base):
+    __tablename__ = 'prepared_drafts'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    responsibility_id: Mapped[str] = mapped_column(ForeignKey('responsibilities.id'), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DraftRevision(Base):
+    __tablename__ = 'draft_revisions'
+    __table_args__ = (UniqueConstraint('draft_id','version'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    draft_id: Mapped[str] = mapped_column(ForeignKey('prepared_drafts.id'), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    context_json: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    review_status: Mapped[str] = mapped_column(String(32), default='pending')
+    review_note: Mapped[str] = mapped_column(Text, default='')
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ModelUsage(Base):
+    __tablename__ = 'model_usage'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(32), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(32), nullable=True,index=True)
+    provider: Mapped[str] = mapped_column(String(250))
+    model: Mapped[str] = mapped_column(String(250))
+    operation: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16))
+    input_tokens: Mapped[int | None] = mapped_column(Integer,nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer,nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer,nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow,index=True)
+
+
+class CodingJob(Base):
+    __tablename__ = 'coding_jobs'
+    id: Mapped[str] = mapped_column(String(32),primary_key=True,default=new_id)
+    responsibility_id: Mapped[str] = mapped_column(ForeignKey('responsibilities.id'),index=True)
+    status: Mapped[str] = mapped_column(String(32),default='prepared',index=True)
+    objective: Mapped[str] = mapped_column(Text)
+    criteria: Mapped[str] = mapped_column(Text)
+    contract_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text,default='{}')
+    version: Mapped[int] = mapped_column(Integer,default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow)
