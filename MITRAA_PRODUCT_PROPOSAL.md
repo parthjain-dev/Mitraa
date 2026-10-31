@@ -6,6 +6,20 @@ coding-proposal adapter using selected text, an isolated output folder, review a
 static checks. Command-capable agent isolation, automatic integration and the pilot
 remain future work. Implemented features still require real workflow validation.
 
+**Implementation update (31 October 2026):** Accepted coding proposals can now be
+explicitly applied to their original workspace through the desktop UI. Application
+checks for changed selected files and artifacts, rechecks workspace permission,
+keeps sibling backups, and uses a durable journal for interrupted multi-file updates.
+This does not execute generated code, automatically merge work, or complete the
+responsibility. Restoring backups is manual.
+
+Optional desktop-approved Python checks now run `unittest` or compare program
+output in a temporary copy with Windows process/resource limits. Versioned evidence
+records output, exit status, timestamps and artifact/context hashes. Failed or
+interrupted checks block review until rerun successfully. This is local execution
+under the user's account, not enforced filesystem/network isolation; it requires
+explicit approval for trusted code. Full agent isolation remains future work.
+
 **Implementation update (29 October 2026):** Milestone 4 includes local checklist
 preparation, saved text/Markdown drafts, provenance snapshots, missing-fact questions,
 revision diffs/history, and explicit review decisions. AI tools can prepare/revise

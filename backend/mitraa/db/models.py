@@ -251,3 +251,16 @@ class CodingJob(Base):
     version: Mapped[int] = mapped_column(Integer,default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow)
+
+
+class CodingCheck(Base):
+    __tablename__ = 'coding_checks'
+    id: Mapped[str] = mapped_column(String(32),primary_key=True,default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey('coding_jobs.id'),index=True)
+    artifact_hash: Mapped[str] = mapped_column(String(64))
+    context_hash: Mapped[str] = mapped_column(String(64))
+    recipe_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32),default='running')
+    report_json: Mapped[str] = mapped_column(Text,default='{}')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)

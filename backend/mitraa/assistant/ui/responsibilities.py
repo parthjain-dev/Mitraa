@@ -447,6 +447,8 @@ class DeskRuntime(QObject):
         self.worker=worker or FollowUpWorker(lambda op,data,error:self.result.emit(op,data,error),self.timezone,factory)
         from mitraa.assistant.coding_worker import CodingWorker
         self.coder=CodingWorker(lambda op,data,error:self.result.emit(op,data,error),factory=factory)
+        from mitraa.assistant.check_worker import CheckWorker
+        self.checker=CheckWorker(lambda op,data,error:self.result.emit(op,data,error),factory=factory)
         self.desk=ResponsibilityDesk(self); self.provider=ProviderDialog(self)
         self.alert=ReminderAlert(self)
         self.alert.dismissed.connect(self.dismiss_alert)
@@ -485,6 +487,11 @@ class DeskRuntime(QObject):
 
     def handle(self,operation,payload,error):
         if self.closed: return
+        if operation=='job_check_finished':
+            if self.jobs and self.jobs.current and self.jobs.current['id']==payload['id']:
+                self.jobs.refresh()
+                if error:self.jobs.notice.setText(error)
+            return
         if operation=='job_changed':
             if self.jobs and self.jobs.current and self.jobs.current['id']==payload['id']:self.jobs.refresh()
             return
@@ -566,6 +573,7 @@ class DeskRuntime(QObject):
     def shutdown(self):
         self.closed=True; self.timer.stop(); self.worker.shutdown()
         self.coder.shutdown()
+        self.checker.shutdown()
         self.alert.close()
         if self.usage_dialog: self.usage_dialog.close()
         if self.jobs: self.jobs.close()

@@ -26,7 +26,37 @@ def test_outside_and_scripts_blocked(tmp_path,roots,make_ctx):
     tool=WriteTextFile()
     for path in [tmp_path/'outside.txt',roots['Documents']/'run.ps1']:
         assert evaluate(tool,WriteTextArgs(path=str(path),content='text'),make_ctx()).level==RiskLevel.BLOCKED
-    assert not tool.run(WriteTextArgs(path=str(roots['Documents']/'run.py'),content='text'),make_ctx(approved=True)).ok
+    assert not tool.run(WriteTextArgs(path=str(roots['Documents']/'run.ps1'),content='text'),make_ctx(approved=True)).ok
+
+
+def test_python_create_edit_and_syntax_validation(roots,make_ctx,trash):
+    path=roots['Documents']/'even.py'; tool=WriteTextFile()
+    code='for number in range(2, 101, 2):\n    print(number)\n'
+    args=WriteTextArgs(path=str(path),content=code)
+    assert evaluate(tool,args,make_ctx()).needs_approval
+    assert not tool.run(args,make_ctx()).ok and not path.exists()
+    assert tool.run(args,make_ctx(approved=True)).ok
+    assert ReadFile().run(ReadFileArgs(path=str(path)),make_ctx()).data['content']==code
+    invalid=WriteTextArgs(path=str(path),mode='replace',content='for number in (')
+    assert not tool.run(invalid,make_ctx(approved=True)).ok
+    assert path.read_text()==code and not trash
+    updated=code+'print("done")\n'
+    assert tool.run(WriteTextArgs(path=str(path),mode='replace',content=updated),make_ctx(approved=True)).ok
+    assert path.read_text()==updated and len(trash)==1
+
+
+def test_python_is_checked_without_running_it(roots,make_ctx):
+    path=roots['Documents']/'never_run.PY'
+    code='raise RuntimeError("must not run")\n'
+    assert WriteTextFile().run(WriteTextArgs(path=str(path),content=code),make_ctx(approved=True)).ok
+    assert path.read_text()==code
+
+
+def test_python_append_validates_combined_file(roots,make_ctx,trash):
+    path=roots['Documents']/'append.py';path.write_text('x = 1\n')
+    args=WriteTextArgs(path=str(path),mode='append',content='    invalid indentation\n')
+    assert not WriteTextFile().run(args,make_ctx(approved=True)).ok
+    assert path.read_text()=='x = 1\n' and not trash
 
 @pytest.mark.parametrize('content',[b'\xff\xfe\x00',b'hello\x00world'])
 def test_binary_or_invalid_encoding_is_not_changed(content,roots,make_ctx):
@@ -49,12 +79,13 @@ def test_registry_exposes_tools(registry):
 def test_agent_write_waits_for_explicit_decision(approved,roots,settings,session,sandbox,registry):
     from mitraa.agent.orchestrator import Orchestrator,ApprovalError
     from tests.fakes import FakeLLM,act,call,say
-    path=roots['Documents']/'agent-note.txt'
-    agent=Orchestrator(FakeLLM([act(call('write_text_file',{'path':str(path),'content':'Hello Mitraa','mode':'create'})),say('Decision handled.')]),session,settings,registry=registry,sandbox=sandbox)
-    pending=agent.run(None,'Create a text note saying Hello Mitraa')
+    path=roots['Documents']/'agent-even.py'
+    code='for n in range(2, 101, 2):\n    print(n)\n'
+    agent=Orchestrator(FakeLLM([act(call('write_text_file',{'path':str(path),'content':code,'mode':'create'})),say('Decision handled.')]),session,settings,registry=registry,sandbox=sandbox)
+    pending=agent.run(None,'Create a Python file printing even numbers through 100')
     assert pending.type=='approval_required' and not path.exists()
     decision=pending.pending_approval.approval_id
     agent.resume(decision,approved)
     assert path.exists()==approved
-    if approved: assert path.read_text()=='Hello Mitraa'
+    if approved: assert path.read_text()==code
     with pytest.raises(ApprovalError): agent.resume(decision,approved)

@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel,ConfigDict,Field
 from sqlalchemy import select,update
 from mitraa.config import BACKEND_DIR
-from mitraa.db.models import CodingJob,utcnow
+from mitraa.db.models import CodingJob,FileAction,utcnow
 from mitraa.responsibilities import service
 from mitraa.security.sandbox import Sandbox,SandboxViolation
 
@@ -26,6 +26,7 @@ class JobCreate(BaseModel):
     output_files: list[str]=Field(min_length=1,max_length=8)
     max_output_tokens: int=Field(default=2048,ge=256,le=4096)
     timeout_seconds: int=Field(default=60,ge=10,le=120)
+    output_names_explicit: bool=False
 
 
 def relative(value):
@@ -48,11 +49,11 @@ def resolve_file(root,name):
     return path
 
 
-def read_text(path):
+def read_text(path,max_bytes=MAX_BYTES):
     if not path.exists(): return None
     if not path.is_file(): raise ValueError('Select text files, not folders.')
-    with path.open('rb') as stream: raw=stream.read(MAX_BYTES+1)
-    if len(raw)>MAX_BYTES or b'\x00' in raw: raise ValueError('Selected text is too large or binary.')
+    with path.open('rb') as stream: raw=stream.read(max_bytes+1)
+    if len(raw)>max_bytes or b'\x00' in raw: raise ValueError('Selected text is too large or binary.')
     try: return raw.decode('utf-8')
     except UnicodeDecodeError: raise ValueError('Selected files must be UTF-8 text.') from None
 
@@ -66,6 +67,13 @@ def row(session,jid):
 def as_dict(item,content=True):
     contract=json.loads(item.contract_json)
     result=json.loads(item.result_json)
+    if content:
+        from sqlalchemy.orm import object_session
+        from mitraa.assistant.check_worker import history
+        session=object_session(item)
+        if session is not None:
+            result['test_runs']=history(session,item.id)
+            if result['test_runs']:result['verification']='Approved local check evidence is listed in test_runs. Passing checks do not prove every acceptance criterion.'
     if not content: contract={**contract,'snapshot':{k:'[selected text]' for k in contract['snapshot']}}
     return dict(id=item.id,responsibility_id=item.responsibility_id,status=item.status,version=item.version,
         objective=item.objective,acceptance_criteria=item.criteria,contract=contract,result=result,
@@ -80,6 +88,25 @@ def create(session,data,settings):
     if not root.is_dir(): raise ValueError('Workspace must be an existing permitted folder.')
     inputs=list(dict.fromkeys(relative(n.strip()) for n in data.source_files))
     outputs=list(dict.fromkeys(relative(n.strip()) for n in data.output_files))
+    redirects={}
+    if not data.output_names_explicit:
+        for name in set(inputs+outputs):
+            source=resolve_file(root,name)
+            target=None
+            record=session.scalars(select(FileAction).where(FileAction.action=='write_text_file',
+                FileAction.src==str(source),FileAction.undone.is_(False)).order_by(FileAction.id.desc()).limit(1)).first()
+            if record: target=Path(record.dst)
+            if target is None:
+                for previous in session.scalars(select(CodingJob).where(CodingJob.status=='applied').order_by(CodingJob.updated_at.desc())):
+                    old_contract=json.loads(previous.contract_json)
+                    if old_contract['workspace']!=str(root):continue
+                    old_result=json.loads(previous.result_json)
+                    saved={**old_result.get('saved_files',{}),**old_result.get('working_copies',{})}
+                    if name in saved:target=Path(saved[name]);break
+            if target is not None and target.parent==source.parent and target.exists():
+                redirects[name]=relative(target.relative_to(root).as_posix())
+        inputs=list(dict.fromkeys(redirects.get(name,name) for name in inputs))
+        outputs=list(dict.fromkeys(redirects.get(name,name) for name in outputs))
     snapshot={}
     for name in dict.fromkeys(inputs+outputs):
         text=read_text(resolve_file(root,name))
@@ -94,7 +121,15 @@ def create(session,data,settings):
     if parsed.scheme!='https' and not(parsed.scheme=='http' and parsed.hostname in {'localhost','127.0.0.1','::1'}):
         raise ValueError('Provider must use HTTPS or loopback HTTP.')
     if not settings.nemotron_model: raise ValueError('Configure the AI model first.')
+    targets={name:(name if data.output_names_explicit or name in redirects.values() or snapshot[name] is None or Path(name).stem.lower().endswith('_bymitraa')
+        else str(PurePosixPath(name).with_name(Path(name).stem+'_byMitraa'+Path(name).suffix))) for name in outputs}
+    if len({name.lower() for name in targets.values()})!=len(targets): raise ValueError('Output destinations overlap.')
+    for name,target in targets.items():
+        if target!=name and resolve_file(root,target).exists():
+            raise ValueError('The working-copy name already exists. Select that file explicitly or choose a different output name.')
+    apply_snapshot={target:read_text(resolve_file(root,target),64000) for target in targets.values()}
     contract=dict(workspace=str(root),source_files=inputs,output_files=outputs,snapshot=snapshot,
+        apply_targets=targets,apply_snapshot=apply_snapshot,output_names_explicit=data.output_names_explicit,
         provider=parsed.hostname,endpoint=endpoint,model=settings.nemotron_model,
         max_output_tokens=data.max_output_tokens,timeout_seconds=data.timeout_seconds,max_calls=1,
         execution='No commands, imports, package installation, browsing or original-workspace writes')
@@ -124,12 +159,17 @@ def transition(session,jid,version,allowed,status,result=None):
 
 
 def cancel(session,jid,version):
-    return transition(session,jid,version,{'prepared','running','ready_for_review','verification_failed'},'cancelled')
+    return transition(session,jid,version,{'prepared','running','checking','ready_for_review','verification_failed'},'cancelled')
 
 
 def recover(session):
     session.execute(update(CodingJob).where(CodingJob.status=='running').values(status='interrupted',
         version=CodingJob.version+1,updated_at=utcnow(),result_json=json.dumps({'notice':'Interrupted by restart. Not retried automatically.'})))
+    from mitraa.db.models import CodingCheck
+    session.execute(update(CodingCheck).where(CodingCheck.status=='running').values(status='interrupted',finished_at=utcnow(),
+        report_json=json.dumps({'notice':'Interrupted by restart. Run again with approval.'})))
+    session.execute(update(CodingJob).where(CodingJob.status=='checking').values(status='ready_for_review',
+        version=CodingJob.version+1,updated_at=utcnow()))
 
 
 def accept(session,jid,version,note,confirmed):
@@ -137,6 +177,8 @@ def accept(session,jid,version,note,confirmed):
     if service.get(session,item.responsibility_id).status in service.TERMINAL:
         raise ValueError('Reopen the responsibility before reviewing coding work.')
     if not confirmed or not note.strip(): raise ValueError('Explicit review confirmation and a note are required.')
+    from mitraa.assistant.check_worker import require_passing_checks
+    require_passing_checks(session,item)
     result=json.loads(item.result_json)
     if result.get('missing_facts'): raise ValueError('Resolve missing facts in a new job before accepting.')
     if item.status=='ready_for_review':
@@ -148,6 +190,96 @@ def accept(session,jid,version,note,confirmed):
             with path.open('rb') as stream: raw=stream.read(64001)
             if raw!=text.encode(): raise ValueError('An isolated artifact changed after verification. Prepare a new job.')
     return transition(session,jid,version,{'ready_for_review'},'accepted',dict(result,review_note=note.strip()))
+
+
+def apply_to_workspace(session,jid,version,confirmed,settings):
+    """Explicit local integration. A durable journal permits retry after partial writes."""
+    import os
+    import re
+    import tempfile
+    item=row(session,jid)
+    if not confirmed: raise ValueError('Confirm replacing the reviewed files first.')
+    if item.version!=version or item.status!='accepted':
+        raise service.Conflict('Accept the review and reload before applying changes.')
+    from mitraa.assistant.check_worker import require_passing_checks
+    require_passing_checks(session,item)
+    if service.get(session,item.responsibility_id).status in service.TERMINAL:
+        raise ValueError('Reopen the responsibility before applying changes.')
+    if not re.fullmatch('[a-f0-9]{32}',jid): raise ValueError('Invalid job identifier.')
+    contract=json.loads(item.contract_json); result=json.loads(item.result_json)
+    root=Path(contract['workspace'])
+    if any(p.is_symlink() or getattr(p,'is_junction',lambda:False)() for p in (root,*root.parents)):
+        raise ValueError('Workspace links and junctions are not allowed.')
+    root=Sandbox(settings.allowed_roots).resolve(str(root))
+    if not root.is_dir(): raise ValueError('Original workspace no longer exists.')
+    folder=Path(result['artifact_folder'])
+    if folder.is_symlink() or getattr(folder,'is_junction',lambda:False)(): raise ValueError('Artifact folder changed.')
+    files=result['files']
+    checked=verify(contract,{'files':files,'missing_facts':result.get('missing_facts',[])})
+    if checked['missing_facts'] or any(not c['passed'] for c in checked['checks']):
+        raise ValueError('Resolve failed checks and missing facts before applying.')
+    for name,text in files.items():
+        if resolve_file(folder.resolve(),name).read_bytes()!=text.encode('utf-8'):
+            raise ValueError('Reviewed artifact changed. Prepare a new job.')
+    journal=folder/'apply-journal.json'
+    if journal.is_symlink(): raise ValueError('Apply journal must not be a link.')
+    # Older contracts retain their reviewed destinations; prepare a new contract
+    # to use the new copy policy, rather than silently changing an approval.
+    targets=contract.get('apply_targets',{name:name for name in files})
+    destination_files={targets[name]:text for name,text in files.items()}
+    destination_snapshot=contract.get('apply_snapshot',contract['snapshot'])
+    expected={'workspace':str(root),'files':destination_files,'snapshot':contract['snapshot']}
+    resuming=journal.exists()
+    if resuming and json.loads(journal.read_text(encoding='utf-8'))!=expected:
+        raise ValueError('Apply journal changed. Inspect the files manually.')
+    paths={}; backups={}
+    # Check every selected input as well as outputs before modifying anything.
+    for name,before in contract['snapshot'].items():
+        path=resolve_file(root,name); current=read_text(path,64000)
+        if current!=before and not(resuming and name in destination_files and current==destination_files[name]):
+            raise ValueError('Workspace file changed since preparation: '+name+'. Prepare a new job.')
+    for name,text in destination_files.items():
+        path=resolve_file(root,name)
+        current=read_text(path,64000);before=destination_snapshot[name]
+        if current!=before and not(resuming and current==text):
+            raise ValueError('Working copy changed since preparation: '+name+'. Prepare a new job.')
+        if not path.parent.is_dir(): raise ValueError('Output parent folder must already exist: '+name)
+        backup=path.with_name(path.name+'.mitraa-'+jid+'.bak')
+        if backup.is_symlink() or getattr(backup,'is_junction',lambda:False)(): raise ValueError('Backup path is a link.')
+        if backup.exists() and (not resuming or before is None or backup.read_bytes()!=before.encode('utf-8')):
+            raise ValueError('Backup already exists or changed: '+str(backup))
+        paths[name]=path
+        if before is not None: backups[name]=str(backup)
+    # Claim the DB version before writes. The journal/backups remain if a crash rolls it back.
+    saved_files={name:str(root/targets[name]) for name in files}
+    working_copies=dict(saved_files)
+    if len(contract['source_files'])==1 and len(files)==1:
+        working_copies[contract['source_files'][0]]=next(iter(saved_files.values()))
+    applied=transition(session,jid,version,{'accepted'},'applied',dict(result,applied_workspace=str(root),backups=backups,
+        saved_files=saved_files,working_copies=working_copies))
+    if not resuming:
+        with journal.open('x',encoding='utf-8') as stream:
+            json.dump(expected,stream); stream.flush(); os.fsync(stream.fileno())
+    for name,path in paths.items():
+        before=destination_snapshot[name]; text=destination_files[name]
+        current=read_text(resolve_file(root,name),64000)
+        if current!=before and not(resuming and current==text):
+            raise ValueError('Workspace changed during apply: '+name)
+        if before is not None:
+            backup=Path(backups[name])
+            if not backup.exists():
+                with backup.open('xb') as stream:
+                    stream.write(before.encode('utf-8')); stream.flush(); os.fsync(stream.fileno())
+        if current==text: continue
+        fd,temp=tempfile.mkstemp(prefix='.mitraa-',suffix='.tmp',dir=path.parent)
+        try:
+            with os.fdopen(fd,'wb') as stream:
+                stream.write(text.encode('utf-8')); stream.flush(); os.fsync(stream.fileno())
+            if read_text(resolve_file(root,name),64000)!=current: raise ValueError('Workspace changed during apply: '+name)
+            os.replace(temp,path)
+        finally:
+            if os.path.exists(temp): os.unlink(temp)
+    return applied
 
 
 def verify(contract,proposal):

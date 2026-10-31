@@ -32,6 +32,29 @@ def test_prepare_review_contract_and_run_with_fake_adapter(runtime,session_facto
     panel.refresh();until(lambda:not panel.pending and panel.current['status']=='ready_for_review')
     assert '+    return 2' in panel.diff.toPlainText()
     assert 'No generated code or tests were executed' in panel.proposal.toPlainText()
+    panel.check_kind.setCurrentIndex(1);panel.check_file.setCurrentText('helper.py')
+    monkeypatch.setattr(QMessageBox,'question',lambda *a,**kw:QMessageBox.No)
+    panel.run_check();assert not runtime.checker.busy
+    monkeypatch.setattr(QMessageBox,'question',lambda *a,**kw:QMessageBox.Yes)
+    panel.run_check()
+    for _ in range(600):
+        QTest.qWait(25)
+        if not runtime.checker.busy:break
+    assert not runtime.checker.busy
+    until(lambda:not panel.pending)
+    panel.refresh();until(lambda:not panel.pending and panel.current['status']=='ready_for_review')
+    assert panel.current['result']['test_runs'][0]['status']=='passed',panel.check_results.toPlainText()
     panel.note.setText('Inspected the proposal against criteria');panel.accept()
     until(lambda:not panel.pending and panel.current['status']=='accepted')
     assert 'return 1' in (root/'helper.py').read_text()
+    monkeypatch.setattr(QMessageBox,'question',lambda *a,**kw:QMessageBox.No)
+    panel.apply_files()
+    assert not panel.pending and 'return 1' in (root/'helper.py').read_text()
+    monkeypatch.setattr(QMessageBox,'question',lambda *a,**kw:QMessageBox.Yes)
+    panel.apply_files()
+    for _ in range(400):
+        QTest.qWait(25)
+        if not panel.pending:break
+    assert not panel.pending and panel.current['status']=='applied',panel.notice.text()
+    assert 'return 1' in (root/'helper.py').read_text()
+    assert 'return 2' in (root/'helper_byMitraa.py').read_text()

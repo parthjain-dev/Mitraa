@@ -28,8 +28,12 @@ submit it or complete the responsibility.
 
 **Coding jobs** prepares bounded source edits through the configured provider.
 Review selected text and approve the job before any remote request. Proposed
-changes go into an isolated job folder with diffs and static syntax checks;
-original files stay unchanged. See the backend README for limits and review steps.
+changes go into an isolated job folder with diffs and static syntax checks.
+Optional **Run checks** adds approved Python unit tests/output comparisons with
+saved results. Local execution uses a temporary copy and Windows resource limits,
+not a filesystem/network security sandbox. Approve only trusted code. Reviewed
+changes can be saved beside originals using the `_byMitraa` working-copy rule.
+See the backend README for limits and review steps.
 
 ```powershell
 cd backend

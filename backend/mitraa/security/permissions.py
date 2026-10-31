@@ -39,6 +39,8 @@ def evaluate(tool: Tool, args: BaseModel, ctx: ToolContext) -> Assessment:
 
     level = tool.risk(args, ctx)
     reasons: list[str] = []
+    if tool.name=='write_text_file' and impact.paths:
+        reasons.append(f'Save to: {impact.paths[-1]}')
     if level >= RiskLevel.HIGH:
         reasons.append(f"{tool.name} always requires approval.")
     if impact.overwrites:

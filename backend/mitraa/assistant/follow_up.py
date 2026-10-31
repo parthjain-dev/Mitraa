@@ -58,6 +58,9 @@ class FollowUpWorker:
                         elif operation=='job_detail': result=jobs.as_dict(jobs.row(session,arguments['id']))
                         elif operation=='job_cancel': result=jobs.cancel(session,arguments['id'],arguments['version'])
                         elif operation=='job_accept': result=jobs.accept(session,arguments['id'],arguments['version'],arguments['note'],arguments['confirmed'])
+                        elif operation=='job_apply':
+                            from mitraa.config import get_settings
+                            result=jobs.apply_to_workspace(session,arguments['id'],arguments['version'],arguments['confirmed'],get_settings())
                         elif operation=='job_recover': jobs.recover(session); result={}
                         else: raise ValueError('Unknown coding job operation.')
                         session.commit()

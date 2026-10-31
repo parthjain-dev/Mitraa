@@ -307,6 +307,10 @@ class ReadFile(Tool):
         if not path.is_file():
             return ToolResult.fail(f"No file at {path}. Use search_files to find it.")
         meta = _info(path)
+        from mitraa.tools.text_files import known_edit
+        working=known_edit(path,ctx)
+        if working is not None and working!=path and working.is_file():
+            meta['working_copy']=str(working)
         if path.suffix.lower() in BINARY_SUFFIXES or _looks_binary(path):
             kind = path.suffix.lstrip(".").upper() or "binary"
             return ToolResult.success(

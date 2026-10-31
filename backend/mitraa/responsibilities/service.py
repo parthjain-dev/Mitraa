@@ -123,12 +123,13 @@ def forget(session, rid, expected_version):
         execution_options={'synchronize_session': False})
     if result.rowcount != 1:
         raise Conflict('This responsibility changed. Refresh before forgetting it.')
-    from mitraa.db.models import CodingJob
-    if session.scalar(select(CodingJob.id).where(CodingJob.responsibility_id==rid,CodingJob.status=='running')):
+    from mitraa.db.models import CodingJob,CodingCheck
+    if session.scalar(select(CodingJob.id).where(CodingJob.responsibility_id==rid,CodingJob.status.in_({'running','checking'}))):
         raise ValueError('Cancel running coding jobs before forgetting this responsibility.')
     session.execute(delete(Reminder).where(Reminder.responsibility_id == rid))
     from mitraa.responsibilities.drafts import forget_for_responsibility
     forget_for_responsibility(session,rid)
+    session.execute(delete(CodingCheck).where(CodingCheck.job_id.in_(select(CodingJob.id).where(CodingJob.responsibility_id==rid))))
     session.execute(delete(CodingJob).where(CodingJob.responsibility_id==rid))
     session.execute(delete(ResponsibilityEvent).where(ResponsibilityEvent.responsibility_id == rid))
     session.execute(delete(Responsibility).where(Responsibility.id == rid),

@@ -42,7 +42,19 @@ The model routes these through `open_folder`, `read_file`, and `write_text_file`
 Folder opening uses Windows File Explorer; reading/listing stays in the chat.
 Text writes always show the existing Allow/Deny approval card. Existing versions
 go to the Recycle Bin before replacement or append. Creation refuses to overwrite.
-Writes support UTF-8 .txt/.md/.log/.csv/.json, with a 1 MB resulting-file limit.
+Writes support UTF-8 .txt/.md/.log/.csv/.json/.py, with a 1 MB resulting-file limit.
+For example: "Create Desktop/even.py to print even numbers from 2 through 100."
+Python files can be created, replaced or appended through chat after approval.
+The complete resulting Python source is syntax-checked before saving; it is never
+executed. Existing versions go to the Recycle Bin. Coding-job proposals remain
+separate until **Apply to original folder**.
+Edits preserve the original by default: `test.py` becomes `test_byMitraa.py` in the
+same folder. Later edits reuse the tracked working copy, including a custom name.
+`read_file` returns a `working_copy` hint when appropriate; the agent reads that
+file before editing. `output_name` is reserved for a filename explicitly given by
+the user; `overwrite_original` requires an explicit request to replace the source.
+The approval reasons show the actual save destination. Untracked name collisions
+are refused rather than silently replaced.
 Paths remain restricted by `MITRAA_ALLOWED_ROOTS`; this feature does not grant
 access to additional folders. General commands require the configured agent provider.
 
@@ -142,8 +154,9 @@ preserving existing conversations, responsibilities, memories and reminders.
 ### Bounded coding jobs (milestone 5 first adapter)
 
 Select a saved open responsibility, then **Coding jobs**. This adapter uses the
-configured OpenAI-compatible provider to propose small source-code edits. It does
-not launch Codex/Claude, terminals, or generated code.
+configured OpenAI-compatible provider to propose small source-code edits. Generation
+does not launch Codex/Claude, terminals, or generated code. Local Python checks are
+a separate, explicitly approved desktop action.
 
 1. Choose an existing project folder inside `MITRAA_ALLOWED_ROOTS`, for example a
    small project under Documents. Enter an objective, acceptance criteria, selected
@@ -158,17 +171,30 @@ not launch Codex/Claude, terminals, or generated code.
    discarded. These are not currency spending caps; remote work already sent
    cannot be undone or refunded by cancellation.
 4. Inspect proposed files, diffs, missing facts and actual local Python AST/JSON
-   syntax checks. Syntax success is not proof acceptance criteria are met. No
-   project tests, imports, code execution, package installation or shell commands
-   run. Other text types require manual validation.
-5. Outputs are saved only in gitignored `backend/jobs/<job-id>/`. Original files
-   remain unchanged. Enter a review note and confirm **Accept review**; unresolved
+   syntax checks. Syntax success is not proof acceptance criteria are met. Generation
+   does not run project code. Use the optional **Run checks** tab described below
+   for approved Python execution. Other text types require manual validation.
+5. Proposals are saved in gitignored `backend/jobs/<job-id>/`. Enter a review note
+   and confirm **Accept review**; unresolved
    missing facts or changed artifacts block acceptance. This records review only,
-   not a merge, submission or responsibility completion. Inspect/copy selected
-   outputs manually if you decide to integrate them.
+   not a merge, submission or responsibility completion.
+6. Click **Apply to original folder** to save beside the source. New contracts
+   default to `<original stem>_byMitraa<extension>` for edits, preserving originals.
+   Further jobs reuse the tracked working copy and its current contents. For an
+   explicitly supplied filename, enter it in Outputs and tick **Use output filenames
+   exactly as entered** before preparing the contract. Old contracts retain their
+   original reviewed destinations; prepare a new one for the new naming behavior.
+   Existing working copies receive a sibling backup named
+   `<filename>.mitraa-<job-id>.bak`. New outputs are created at their selected paths;
+   parent folders must already exist. Changed selected inputs/outputs, changed
+   artifacts, or revoked workspace access block application. No code is executed.
+   Multi-file application is one file at a time: after an interruption, refresh
+   and retry Apply. A local journal and backups support resuming. Keep backups
+   until satisfied; restoring them is manual. Avoid editing files during Apply.
 
 Jobs persist through prepared/running/ready_for_review/verification_failed/failed/
-cancelled/interrupted/accepted states. One coding request runs at a time.
+checking/cancelled/interrupted/accepted/applied states. One coding request and one
+local check can run at a time.
 Cancellation discards late results; restart marks running jobs interrupted without
 automatic retries. Prepare a new contract to retry or when source files/provider
 change. Traversal, links, hidden files and credential-like names are refused.
@@ -184,6 +210,50 @@ API: `POST /coding-jobs`, `GET /responsibilities/{id}/coding-jobs`,
 `GET /coding-jobs/{id}`, `POST /coding-jobs/{id}/cancel` and `/accept`.
 Starting remote work requires the desktop's explicit contract confirmation;
 chat tools cannot silently start a coding job.
+
+### Approved Python checks
+
+After generating a proposal, open **Run checks** in Coding jobs. Choose either
+**Python unit tests (unittest)** or **Compare program output**, select one Python
+file from the snapshot/proposal, and set a 1–30 second timeout. For output checks,
+enter the exact expected printed text. CRLF is normalized and one final newline
+is optional; other whitespace matters. For unit tests, select a file containing
+`unittest.TestCase` tests. Zero tests or all-skipped tests do not pass. Include any
+required local modules/test files in the original job's selected inputs.
+
+**Run approved check** shows a separate confirmation, defaulting to No. The check
+uses a fresh temporary directory under ignored `backend/jobs/`, overlays proposed
+files on the selected snapshot, and runs a fixed stdlib Python driver without a
+shell. No provider call, package installation, pytest plug-ins, or third-party
+dependencies are used. Python runs with `-I -S -B` and a filtered environment;
+provider/API-key environment variables are not inherited. Windows Job Objects
+limit the run to one process, 256 MB committed process memory, and bounded CPU
+time; wall time and stdout/stderr are capped (32 KB each). If process limits
+cannot be installed, selected code is not started. **Stop check** terminates the
+process. Closing Mitraa also stops active checks. See the Windows
+[Job Objects documentation](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+**This is not a security sandbox.** Code still runs as your Windows user and can
+access that account's files and network. The temporary copy and process limits
+do not enforce filesystem/network isolation. Approve only code you trust; use a
+separate VM/sandbox for untrusted code. Python checks currently require Windows.
+
+Saved evidence includes the recipe, timestamp, artifact/context hashes, exit code,
+output, duration and pass/fail/timeout/cancellation status. Changing selected files
+inside the test copy prevents a passing result. Check history appears in **Run
+checks** and `GET /coding-jobs/{id}`. A check clears prior review acceptance;
+failed/stopped/interrupted checks block acceptance until the same file/check type
+is successfully rerun or a corrected job is prepared. Optional checks that have
+never been run do not block manual review. Passing tests are evidence, not proof
+of every acceptance criterion. The runner verifies its normal completion record;
+test code and self-reported results are not an adversarial trust boundary.
+
+After a crash/restart, an unfinished check is marked interrupted without retry;
+the proposal and earlier reports remain. Temporary check folders left by a crash
+can be removed manually. Check reports are local task data and can contain whatever
+the selected program prints; review before sharing/exporting them. Forget removes
+stored check metadata along with the coding job; isolated artifact folders follow
+the existing manual-retention policy.
 
 ### Token usage
 

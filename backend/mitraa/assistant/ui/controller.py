@@ -125,6 +125,18 @@ class Controller(QObject):
         self.render_history(initial=True)
         self.fetch_history()
 
+    def open_conversation(self):
+        self.expand()
+        if not self.overlay.history_expanded:
+            self.overlay.toggle_history()
+        else:
+            self.overlay._card_visible=True
+            self.overlay.refresh()
+            self.open_history()
+        self.overlay.card.raise_()
+        self.overlay.card.activateWindow()
+        self.overlay.conversation.composer.setFocus()
+
     def fetch_history(self,before=None):
         if self.preview or self.history_loading: return
         if not hasattr(self.worker,'history'): return
@@ -495,6 +507,7 @@ def run_qt(preview=False, startup_settings=None, on_ready=None, show_responsibil
     def action(label,callback,checkable=False,checked=False):
         item=QAction(label,menu); item.setCheckable(checkable); item.setChecked(checked); item.triggered.connect(callback); menu.addAction(item); return item
     action('Open (listen)' if not preview else 'Preview: circle-only listening',controller.summon)
+    action('Open conversation',controller.open_conversation)
     action('New conversation',controller.new_chat)
     local_services=[]
     def local_service():
